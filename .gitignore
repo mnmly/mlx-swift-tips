@@ -1,0 +1,16 @@
+.build/
+.swiftpm/
+.xcbuild/
+Packages/
+*.xcodeproj
+xcuserdata/
+*.xcworkspace
+!default.xcworkspace
+
+*.profraw
+*.profdata
+
+.DS_Store
+.swiftpm/config.json
+
+out/
