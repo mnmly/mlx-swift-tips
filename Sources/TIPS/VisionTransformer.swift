@@ -165,9 +165,9 @@ public class VisionBlock: Module {
     }
 }
 
-// MARK: - TIPSv2ImageOutput
+// MARK: - TIPSImageOutput
 
-public struct TIPSv2ImageOutput {
+public struct TIPSImageOutput {
     /// (B, 1, D) — image-level feature
     public let clsToken: MLXArray
     /// (B, R, D) — register tokens
@@ -352,7 +352,7 @@ public class VisionTransformer: Module {
         return x
     }
 
-    public func callAsFunction(_ pixelValues: MLXArray) -> TIPSv2ImageOutput {
+    public func callAsFunction(_ pixelValues: MLXArray) -> TIPSImageOutput {
         var x = prepareTokens(pixelValues)
         for blk in blocks {
             x = blk(x)
@@ -360,7 +360,7 @@ public class VisionTransformer: Module {
         x = norm(x)
 
         let r = numRegisterTokens
-        return TIPSv2ImageOutput(
+        return TIPSImageOutput(
             clsToken: x[0..., ..<1],
             registerTokens: x[0..., 1..<(1 + r)],
             patchTokens: x[0..., (1 + r)...]

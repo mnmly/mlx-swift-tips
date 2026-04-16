@@ -1,7 +1,7 @@
 import XCTest
 import MLX
 import MLXNN
-@testable import MLXTIPSv2
+@testable import MLXTIPS
 
 final class ShapeTests: XCTestCase {
 
@@ -146,7 +146,7 @@ final class ShapeTests: XCTestCase {
             vocabSize: 100, dim: 64, numHeads: 4, numLayers: 2,
             mlpDim: 256, maxLen: 16
         )
-        let model = TIPSv2Model(vision: vision, text: text)
+        let model = TIPSModel(vision: vision, text: text)
 
         let img = MLXArray.zeros([1, 56, 56, 3])
         let imgOut = model.encodeImage(img)
@@ -170,7 +170,7 @@ final class ShapeTests: XCTestCase {
             "temperature": MLXArray(Float(1.0)),
         ]
         let combinedOut = Dictionary(uniqueKeysWithValues:
-            TIPSv2WeightLoader.buildVisionWeights(combined))
+            TIPSWeightLoader.buildVisionWeights(combined))
         XCTAssertNotNil(combinedOut["cls_token"])
         XCTAssertEqual(combinedOut["patch_embed.proj.weight"]?.shape, [4, 14, 14, 3])
         XCTAssertNil(combinedOut["token_embedding.weight"])
@@ -181,7 +181,7 @@ final class ShapeTests: XCTestCase {
             "patch_embed.proj.weight": MLXArray.zeros([4, 3, 14, 14]),
         ]
         let splitOut = Dictionary(uniqueKeysWithValues:
-            TIPSv2WeightLoader.buildVisionWeights(split))
+            TIPSWeightLoader.buildVisionWeights(split))
         XCTAssertNotNil(splitOut["cls_token"])
         XCTAssertEqual(splitOut["patch_embed.proj.weight"]?.shape, [4, 14, 14, 3])
     }
@@ -194,7 +194,7 @@ final class ShapeTests: XCTestCase {
             "temperature": MLXArray(Float(1.0)),
         ]
         let combinedOut = Dictionary(uniqueKeysWithValues:
-            TIPSv2WeightLoader.buildTextWeights(combined))
+            TIPSWeightLoader.buildTextWeights(combined))
         XCTAssertNotNil(combinedOut["blocks.0.attn.in_proj.weight"])
         XCTAssertNotNil(combinedOut["blocks.0.mlp_c_fc.weight"])
         XCTAssertNil(combinedOut["cls_token"])
@@ -206,7 +206,7 @@ final class ShapeTests: XCTestCase {
             "temperature": MLXArray(Float(1.0)),
         ]
         let splitOut = Dictionary(uniqueKeysWithValues:
-            TIPSv2WeightLoader.buildTextWeights(split))
+            TIPSWeightLoader.buildTextWeights(split))
         XCTAssertNotNil(splitOut["blocks.0.attn.in_proj.weight"])
         XCTAssertNotNil(splitOut["ln_final.weight"])
         XCTAssertNil(splitOut["temperature"])
@@ -223,7 +223,7 @@ final class ShapeTests: XCTestCase {
             ("token_embedding.weight", "token_embedding.weight"),
         ]
         for (input, expected) in cases {
-            XCTAssertEqual(TIPSv2WeightLoader.remapTextKey(input), expected, "Failed for key: \(input)")
+            XCTAssertEqual(TIPSWeightLoader.remapTextKey(input), expected, "Failed for key: \(input)")
         }
     }
 }

@@ -401,9 +401,9 @@ public class DPTSegmentationHead: Module {
     }
 }
 
-// MARK: - TIPSv2DPTOutput
+// MARK: - TIPSDPTOutput
 
-public struct TIPSv2DPTOutput {
+public struct TIPSDPTOutput {
     /// `(B, 1, H, W)` — metric depth in metres
     public let depth: MLXArray
     /// `(B, 3, H, W)` — unit-length surface normals
@@ -412,16 +412,16 @@ public struct TIPSv2DPTOutput {
     public let segmentation: MLXArray
 }
 
-// MARK: - TIPSv2DPTModel
+// MARK: - TIPSDPTModel
 
-/// Full TIPSv2-DPT model: a frozen `VisionTransformer` backbone plus three
+/// Full TIPS-DPT model: a frozen `VisionTransformer` backbone plus three
 /// task heads for depth, normals, and segmentation.
 ///
 /// The backbone is **not** part of the module parameter tree (excluded from
 /// `update(parameters:)`) so that DPT head weights can be loaded independently.
 ///
-/// Mirrors `TIPSv2DPTModel` in `mlx_tipsv2_dpt.py`.
-public class TIPSv2DPTModel: Module {
+/// Mirrors `TIPSDPTModel` in `mlx_tipsv2_dpt.py`.
+public class TIPSDPTModel: Module {
     /// ViT backbone — not tracked by the module system; load separately.
     public let backbone: VisionTransformer
     public let blockIndices: [Int]
@@ -498,10 +498,10 @@ public class TIPSv2DPTModel: Module {
         return segmentationHead(feats, imageSize: (h, w))
     }
 
-    public func callAsFunction(_ pixelValues: MLXArray) -> TIPSv2DPTOutput {
+    public func callAsFunction(_ pixelValues: MLXArray) -> TIPSDPTOutput {
         let h = pixelValues.dim(1), w = pixelValues.dim(2)
         let feats = extractIntermediate(pixelValues)
-        return TIPSv2DPTOutput(
+        return TIPSDPTOutput(
             depth: depthHead(feats, imageSize: (h, w)),
             normals: normalsHead(feats, imageSize: (h, w)),
             segmentation: segmentationHead(feats, imageSize: (h, w))

@@ -3,7 +3,7 @@ import MLXNN
 import SentencepieceTokenizer
 import Foundation
 
-public struct TIPSv2WeightLoader {
+public struct TIPSWeightLoader {
 
     // MARK: - Vision-only
 
@@ -30,17 +30,17 @@ public struct TIPSv2WeightLoader {
 
     // MARK: - Full model — combined safetensors
 
-    /// Load the full `TIPSv2Model` from a combined safetensors checkpoint
+    /// Load the full `TIPSModel` from a combined safetensors checkpoint
     /// (keys prefixed with `vision_encoder.` / `text_encoder.`).
     public static func load(
         safetensorsURL: URL,
         variant: Variant = .B,
         imgSize: Int = 448,
         dtype: DType = .float32
-    ) throws -> TIPSv2Model {
+    ) throws -> TIPSModel {
         let vision = VisionTransformer(variant: variant.vision, imgSize: imgSize)
         let text = TextEncoder(variant: variant.text)
-        let model = TIPSv2Model(vision: vision, text: text)
+        let model = TIPSModel(vision: vision, text: text)
 
         let raw = try MLX.loadArrays(url: safetensorsURL)
 
@@ -66,7 +66,7 @@ public struct TIPSv2WeightLoader {
         variant: Variant = .B,
         imgSize: Int = 448,
         dtype: DType = .float32
-    ) throws -> TIPSv2Model {
+    ) throws -> TIPSModel {
         let safetensorsURL = directory.appendingPathComponent("model.safetensors")
         let tokenizerURL = directory.appendingPathComponent("tokenizer.model")
         let model = try load(
@@ -75,7 +75,7 @@ public struct TIPSv2WeightLoader {
             imgSize: imgSize,
             dtype: dtype
         )
-        model.tokenizer = try TIPSv2Tokenizer(modelPath: tokenizerURL.path)
+        model.tokenizer = try TIPSTokenizer(modelPath: tokenizerURL.path)
         return model
     }
 
@@ -95,10 +95,10 @@ public struct TIPSv2WeightLoader {
         variant: Variant = .B,
         imgSize: Int = 448,
         dtype: DType = .float32
-    ) throws -> TIPSv2Model {
+    ) throws -> TIPSModel {
         let vision = VisionTransformer(variant: variant.vision, imgSize: imgSize)
         let text = TextEncoder(variant: variant.text)
-        let model = TIPSv2Model(vision: vision, text: text)
+        let model = TIPSModel(vision: vision, text: text)
 
         let visionRaw = try MLX.loadArrays(url: visionSafetensorsURL)
         let textRaw = try MLX.loadArrays(url: textSafetensorsURL)
@@ -117,14 +117,14 @@ public struct TIPSv2WeightLoader {
         MLX.eval(model.parameters())
 
         if let tokenizerURL {
-            model.tokenizer = try TIPSv2Tokenizer(modelPath: tokenizerURL.path)
+            model.tokenizer = try TIPSTokenizer(modelPath: tokenizerURL.path)
         }
         return model
     }
 
     // MARK: - Variant
 
-    /// Paired vision + text variant for a given TIPSv2 release.
+    /// Paired vision + text variant for a given TIPS release.
     public struct Variant {
         public let vision: VisionVariant
         public let text: TextVariant
@@ -240,7 +240,7 @@ public struct TIPSv2WeightLoader {
         return out
     }
 
-    /// Load a `TIPSv2DPTModel` from:
+    /// Load a `TIPSDPTModel` from:
     ///   - `dptSafetensorsURL`: the DPT head weights (`model.safetensors` from
     ///     e.g. `google/tipsv2-b14-dpt`)
     ///   - `backboneSafetensorsURL`: the combined backbone safetensors
@@ -252,7 +252,7 @@ public struct TIPSv2WeightLoader {
         config: DPTVariantConfig,
         imgSize: Int = 448,
         dtype: DType = .float32
-    ) throws -> TIPSv2DPTModel {
+    ) throws -> TIPSDPTModel {
         // Build and load backbone
         let backbone = VisionTransformer(variant: config.backboneVariant, imgSize: imgSize)
         let backboneRaw = try MLX.loadArrays(url: backboneSafetensorsURL)
@@ -264,7 +264,7 @@ public struct TIPSv2WeightLoader {
         MLX.eval(backbone.parameters())
 
         // Build DPT model
-        let model = TIPSv2DPTModel(
+        let model = TIPSDPTModel(
             backbone: backbone,
             embedDim: config.embedDim,
             channels: config.channels,
@@ -288,7 +288,7 @@ public struct TIPSv2WeightLoader {
         return model
     }
 
-    /// Load a `TIPSv2DPTModel` from a directory pair:
+    /// Load a `TIPSDPTModel` from a directory pair:
     ///   - `dptDirectory`:      contains `model.safetensors` + `config.json`
     ///   - `backboneDirectory`: contains `model.safetensors` (backbone)
     public static func loadDPT(
@@ -296,7 +296,7 @@ public struct TIPSv2WeightLoader {
         backboneDirectory: URL,
         imgSize: Int = 448,
         dtype: DType = .float32
-    ) throws -> TIPSv2DPTModel {
+    ) throws -> TIPSDPTModel {
         let config = try DPTVariantConfig(directory: dptDirectory)
         return try loadDPT(
             dptSafetensorsURL: dptDirectory.appendingPathComponent("model.safetensors"),

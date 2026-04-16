@@ -1,4 +1,4 @@
-/// TIPSv2 example — mirrors the three PyTorch demo notebooks:
+/// TIPS example — mirrors the three PyTorch demo notebooks:
 ///
 ///   TIPS_Demo.ipynb                       → --task zeroshot  (zero-shot classification)
 ///   TIPS_Demo.ipynb                       → --task pca       (PCA patch-feature visualisation)
@@ -24,7 +24,7 @@ import ImageIO
 import MLX
 import MLXNN
 import MLXLinalg
-import MLXTIPSv2
+import MLXTIPS
 
 // MARK: - Argument parsing
 
@@ -36,7 +36,7 @@ struct Args {
     }
 
     var loadMode: LoadMode = .directory(URL(fileURLWithPath: "."))
-    var variant: TIPSv2WeightLoader.Variant = .B
+    var variant: TIPSWeightLoader.Variant = .B
     var task: String = "zeroshot"
     var outDir: URL = URL(fileURLWithPath: ".")
     var imgSize: Int = 448
@@ -138,7 +138,7 @@ func parseArgs() -> Args {
     return a
 }
 
-func variantFromString(_ s: String) -> TIPSv2WeightLoader.Variant {
+func variantFromString(_ s: String) -> TIPSWeightLoader.Variant {
     switch s.lowercased() {
     case "l":      return .L
     case "so400m", "so": return .So400m
@@ -266,7 +266,7 @@ func makePalette(count: Int) -> [[UInt8]] {
 ///
 /// Encodes the image CLS token and a list of text labels, prints ranked cosine
 /// similarities — identical to `zero_shot_classification` in `example.py`.
-func runZeroshot(model: TIPSv2Model, pixels: MLXArray, labels: [String]) throws {
+func runZeroshot(model: TIPSModel, pixels: MLXArray, labels: [String]) throws {
     guard !labels.isEmpty else { print("  [zeroshot] no labels — skipping"); return }
     let imgOut = model.encodeImage(pixels)
     // CLS token: (1, 1, D) → (1, D)
@@ -287,7 +287,7 @@ func runZeroshot(model: TIPSv2Model, pixels: MLXArray, labels: [String]) throws 
 ///
 /// Reduces D-dimensional patch features to 3 RGB channels via SVD, normalises
 /// to [0, 255] and saves as `pca.png`.
-func runPCA(model: TIPSv2Model, pixels: MLXArray, outDir: URL) throws {
+func runPCA(model: TIPSModel, pixels: MLXArray, outDir: URL) throws {
     let imgOut = model.encodeImage(pixels)
     // patch_tokens: (1, N, D) → (N, D)
     let feats = imgOut.patchTokens[0].asType(.float32)  // (N, D)
@@ -333,7 +333,7 @@ func runPCA(model: TIPSv2Model, pixels: MLXArray, outDir: URL) throws {
 /// Computes cosine similarity between per-patch features and text label embeddings,
 /// takes argmax, colours each patch with a deterministic palette, and saves
 /// `seg.png` (patch-resolution) and `seg_labels.txt`.
-func runSegmentation(model: TIPSv2Model, pixels: MLXArray, labels: [String], outDir: URL) throws {
+func runSegmentation(model: TIPSModel, pixels: MLXArray, labels: [String], outDir: URL) throws {
     guard !labels.isEmpty else { print("  [seg] no labels — skipping"); return }
 
     let imgOut = model.encodeImage(pixels)
@@ -375,7 +375,7 @@ func runSegmentation(model: TIPSv2Model, pixels: MLXArray, labels: [String], out
 ///
 /// Produces depth, normals, and segmentation maps using the DPT heads.
 /// Saves `dpt_depth.png`, `dpt_normals.png`, `dpt_seg.png`.
-func runDPT(dptModel: TIPSv2DPTModel, pixels: MLXArray, outDir: URL) throws {
+func runDPT(dptModel: TIPSDPTModel, pixels: MLXArray, outDir: URL) throws {
     let h = pixels.dim(1), w = pixels.dim(2)
     print("  running DPT heads on \(h)×\(w) image …")
 
@@ -477,7 +477,7 @@ private let tclTemplates: [String] = [
 
 /// Encode each label through all TCL templates, normalize each, mean-pool, re-normalize.
 /// Returns (C, D) feature matrix, l2-normalized per row.
-func encodeTextWithTemplates(model: TIPSv2Model, labels: [String]) throws -> MLXArray {
+func encodeTextWithTemplates(model: TIPSModel, labels: [String]) throws -> MLXArray {
     var classFeats: [MLXArray] = []
     for label in labels {
         let texts = tclTemplates.map { $0.replacingOccurrences(of: "{}", with: label) }
@@ -590,7 +590,7 @@ func predictSlide(
 
 /// Task 5 — Value-attention zero-shot segmentation (mirrors TIPS_zeroshot_segmentation.ipynb).
 func runValueSeg(
-    model: TIPSv2Model,
+    model: TIPSModel,
     pixels: MLXArray,
     labels: [String],
     outDir: URL,
@@ -746,7 +746,7 @@ func trainBinaryLR(xs: MLXArray, ys: MLXArray, C: Float = 0.1, maxIter: Int = 10
 /// Task 6 — Binary foreground segmentation via logistic regression on TIPS patch features.
 /// Mirrors TIPS_foreground_segmentation_Demo.ipynb.
 func runForegroundSeg(
-    model: TIPSv2Model,
+    model: TIPSModel,
     pixels: MLXArray,
     trainDir: URL,
     maskDir: URL,
@@ -870,7 +870,7 @@ if tasks.contains("dpt") || args.task == "all" {
         exit(2)
     }
     print("Loading DPT model from \(dptDir.path) (backbone: \(bbDir.path)) …")
-    let dptModel = try TIPSv2WeightLoader.loadDPT(
+    let dptModel = try TIPSWeightLoader.loadDPT(
         dptDirectory: dptDir,
         backboneDirectory: bbDir
     )
@@ -880,16 +880,16 @@ if tasks.contains("dpt") || args.task == "all" {
     print()
 }
 
-// All non-DPT tasks share the same TIPSv2Model
+// All non-DPT tasks share the same TIPSModel
 let nonDPTTasks = tasks.filter { $0 != "dpt" }
 if !nonDPTTasks.isEmpty && needsBackbone {
-    print("Loading TIPSv2 model …")
-    let model: TIPSv2Model
+    print("Loading TIPS model …")
+    let model: TIPSModel
     switch args.loadMode {
     case .directory(let dir):
-        model = try TIPSv2WeightLoader.load(directory: dir, variant: args.variant)
+        model = try TIPSWeightLoader.load(directory: dir, variant: args.variant)
     case .split(let v, let t, let tok):
-        model = try TIPSv2WeightLoader.load(
+        model = try TIPSWeightLoader.load(
             visionSafetensorsURL: v,
             textSafetensorsURL: t,
             tokenizerURL: tok,

@@ -21,7 +21,7 @@ Weights are loaded from either:
 
 - macOS 14 or later
 - Swift 5.9+
-- A local clone of [swift-sentencepiece](https://github.com/your-org/swift-sentencepiece) at `../swift-sentencepiece` (or adjust the path in `Package.swift`)
+- [swift-sentencepiece](https://github.com/jkrukowski/swift-sentencepiece) — resolved automatically via SPM
 
 ---
 
@@ -29,18 +29,19 @@ Weights are loaded from either:
 
 ```
 Sources/
-  TIPSv2/              ← library target (MLXTIPSv2)
+  TIPS/                ← library target (MLXTIPS)
     VisionTransformer.swift   PatchEmbed, VisionBlock, VisionTransformer
     TextEncoder.swift         TextAttention, TextResBlock, TextEncoder
     Decoders.swift            DPT heads (depth / normals / segmentation)
-    TIPSv2Model.swift         TIPSv2Model wrapper, l2Normalize (visionEncoder, textEncoder are public)
-    WeightLoading.swift       TIPSv2WeightLoader, DPTVariantConfig
-    Tokenizer.swift           TIPSv2Tokenizer (SentencePiece, no BOS/EOS)
-  TIPSv2Example/       ← executable (tipsv2-example)
-    main.swift
+    TIPSModel.swift           TIPSModel wrapper, l2Normalize
+    WeightLoading.swift       TIPSWeightLoader, DPTVariantConfig
+    Tokenizer.swift           TIPSTokenizer (SentencePiece, no BOS/EOS)
 Tests/
-  TIPSv2Tests/
+  TIPSTests/
     ShapeTests.swift
+    ParityTests.swift
+tests/
+  generate_parity_fixtures.py  ← generates Tests/TIPSTests/Fixtures/parity_fixtures.safetensors
 ```
 
 ---
@@ -67,16 +68,16 @@ Mirrors the zero-shot cell from `TIPS_Demo.ipynb`.
 
 ```swift
 import MLX
-import MLXTIPSv2
+import MLXTIPS
 
 // Load from a directory containing model.safetensors + tokenizer.model
-let model = try TIPSv2WeightLoader.load(
+let model = try TIPSWeightLoader.load(
     directory: URL(fileURLWithPath: "path/to/google-tipsv2-b14"),
     variant: .B
 )
 
 // Or from split safetensors files
-let model = try TIPSv2WeightLoader.load(
+let model = try TIPSWeightLoader.load(
     visionSafetensorsURL: URL(fileURLWithPath: "vision.safetensors"),
     textSafetensorsURL:   URL(fileURLWithPath: "text.safetensors"),
     tokenizerURL:         URL(fileURLWithPath: "tokenizer.model"),
@@ -132,13 +133,13 @@ let layers = model.visionEncoder.getIntermediateLayers(
 Mirrors `load_tipsv2_dpt` and `model.predict_*` from `mlx_tipsv2_dpt.py`.
 
 ```swift
-import MLXTIPSv2
+import MLXTIPS
 
 // config.json + model.safetensors come from google/tipsv2-b14-dpt
 let config = try DPTVariantConfig(
     directory: URL(fileURLWithPath: "path/to/google-tipsv2-b14-dpt")
 )
-let dptModel = try TIPSv2WeightLoader.loadDPT(
+let dptModel = try TIPSWeightLoader.loadDPT(
     dptDirectory:      URL(fileURLWithPath: "path/to/google-tipsv2-b14-dpt"),
     backboneDirectory: URL(fileURLWithPath: "path/to/google-tipsv2-b14")
 )
@@ -325,7 +326,7 @@ tipsv2-example [options] <image> [<label> ...]
 
 ```swift
 // Combined HF safetensors (keys prefixed with vision_encoder.)
-let vision = try TIPSv2WeightLoader.loadVisionEncoder(
+let vision = try TIPSWeightLoader.loadVisionEncoder(
     safetensorsURL: URL(fileURLWithPath: "model.safetensors"),
     variant: .L,
     imgSize: 448
@@ -333,7 +334,7 @@ let vision = try TIPSv2WeightLoader.loadVisionEncoder(
 
 // Pre-converted split file (no prefix)
 let raw = try MLX.loadArrays(url: splitURL)
-let params = TIPSv2WeightLoader.buildVisionWeights(raw)
+let params = TIPSWeightLoader.buildVisionWeights(raw)
 try vision.update(parameters: ModuleParameters.unflattened(params), verify: [.noUnusedKeys])
 ```
 
@@ -343,9 +344,36 @@ try vision.update(parameters: ModuleParameters.unflattened(params), verify: [.no
 
 ```swift
 let raw = try MLX.loadArrays(url: dptSafetensorsURL)
-let params = TIPSv2WeightLoader.buildDPTWeights(raw)
+let params = TIPSWeightLoader.buildDPTWeights(raw)
 // ConvTranspose2d kernels: (in, out, kH, kW) → (out, kH, kW, in)
 // Conv2d kernels:          (out, in, kH, kW) → (out, kH, kW, in)
+```
+
+
+### Check parity against mlx-tips
+
+Numerical parity against [mlx-tips](https://github.com/mnmly/mlx-tips) (the Python MLX reference implementation).
+
+**1. Generate fixtures** (run from the Python package root):
+
+```sh
+cd /path/to/mlx-tips
+uv run python /path/to/mlx-swift-tipsv2/tests/generate_parity_fixtures.py
+```
+
+**2. Run parity tests:**
+
+```sh
+TIPS_SNAPSHOT_DIR=/path/to/snapshots/245de45... swift test --filter ParityTests
+```
+
+Expected output (all cosine similarities should be ≥ 0.9999, max_err ≤ 0.02):
+
+```
+[cls_token]        max_err=4.20e-04  cosine=1.000000
+[register_tokens]  max_err=2.70e-04  cosine=1.000000
+[patch_tokens]     max_err=6.91e-03  cosine=1.000000
+[text_embeddings]  max_err=4.39e-04  cosine=1.000000
 ```
 
 ---

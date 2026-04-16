@@ -1,49 +1,38 @@
 // swift-tools-version: 5.9
+// Swift port of the Python MLX TIPSv2 implementation:
+// https://github.com/mnmly/mlx-tips
 import PackageDescription
 
 let package = Package(
-    name: "mlx-swift-tipsv2",
+    name: "mlx-swift-tips",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .library(
-            name: "MLXTIPSv2",
-            targets: ["MLXTIPSv2"]
-        ),
-        .executable(
-            name: "tipsv2-example",
-            targets: ["TIPSv2Example"]
+            name: "MLXTIPS",
+            targets: ["MLXTIPS"]
         ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.17.0"),
-        .package(path: "../swift-sentencepiece"),
+        .package(url: "https://github.com/jkrukowski/swift-sentencepiece", from: "0.0.6")
     ],
     targets: [
         .target(
-            name: "MLXTIPSv2",
+            name: "MLXTIPS",
             dependencies: [
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "SentencepieceTokenizer", package: "swift-sentencepiece"),
             ],
-            path: "Sources/TIPSv2"
-        ),
-        .executableTarget(
-            name: "TIPSv2Example",
-            dependencies: [
-                "MLXTIPSv2",
-                .product(name: "MLX", package: "mlx-swift"),
-                .product(name: "MLXLinalg", package: "mlx-swift"),
-            ],
-            path: "Sources/TIPSv2Example"
+            path: "Sources/TIPS"
         ),
         .testTarget(
-            name: "MLXTIPSv2Tests",
-            dependencies: ["MLXTIPSv2"],
-            path: "Tests/TIPSv2Tests"
+            name: "MLXTIPSTests",
+            dependencies: ["MLXTIPS"],
+            path: "Tests/TIPSTests"
         ),
     ]
 )

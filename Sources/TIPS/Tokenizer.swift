@@ -6,12 +6,12 @@ import Foundation
 /// - lowercase input
 /// - no BOS/EOS tokens
 /// - pad with 0, mark padding positions as 1
-public final class TIPSv2Tokenizer {
+public final class TIPSTokenizer {
     private let sp: SentencepieceTokenizer
 
     /// - Parameter modelPath: Path to `tokenizer.model` (SentencePiece model file)
     public init(modelPath: String) throws {
-        // tokenOffset: 0 — TIPSv2 uses raw SentencePiece IDs, not HuggingFace-shifted ones
+        // tokenOffset: 0 — TIPS uses raw SentencePiece IDs, not HuggingFace-shifted ones
         self.sp = try SentencepieceTokenizer(modelPath: modelPath, tokenOffset: 0)
     }
 
