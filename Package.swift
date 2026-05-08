@@ -13,6 +13,10 @@ let package = Package(
             name: "MLXTIPS",
             targets: ["MLXTIPS"]
         ),
+        .executable(
+            name: "tips-bench",
+            targets: ["tips-bench"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.17.0"),
@@ -28,6 +32,14 @@ let package = Package(
                 .product(name: "SentencepieceTokenizer", package: "swift-sentencepiece"),
             ],
             path: "Sources/TIPS"
+        ),
+        .executableTarget(
+            name: "tips-bench",
+            dependencies: [
+                "MLXTIPS",
+                .product(name: "MLX", package: "mlx-swift"),
+            ],
+            path: "Tools/tips-bench"
         ),
         .testTarget(
             name: "MLXTIPSTests",

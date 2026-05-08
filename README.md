@@ -34,14 +34,21 @@ Sources/
     TextEncoder.swift         TextAttention, TextResBlock, TextEncoder
     Decoders.swift            DPT heads (depth / normals / segmentation)
     TIPSModel.swift           TIPSModel wrapper, l2Normalize
+    Pipeline.swift            TIPSPipeline / TIPSDPTPipeline + MLXTIPS namespace
     WeightLoading.swift       TIPSWeightLoader, DPTVariantConfig
     Tokenizer.swift           TIPSTokenizer (SentencePiece, no BOS/EOS)
+Tools/
+  tips-bench/          ← Swift benchmark CLI (xcodebuild scheme `tips-bench`)
+Benchmarks/
+  torch_tips_bench.py  ← PyTorch reference benchmark (same protocol)
+  README.md            ← reproduction commands + tolerances
 Tests/
   TIPSTests/
     ShapeTests.swift
-    ParityTests.swift
-tests/
-  generate_parity_fixtures.py  ← generates Tests/TIPSTests/Fixtures/parity_fixtures.safetensors
+    ParityTests.swift          ← per-stage parity (debugging aid)
+    ParityFixtureTests.swift   ← end-to-end pipeline parity (release gate)
+  generate_parity_fixtures.py  ← writes Fixtures/parity_fixtures.safetensors
+                                  from the upstream PyTorch reference
 ```
 
 ---
@@ -62,44 +69,63 @@ xcodebuild -scheme mlx-swift-tipsv2 -destination 'platform=macOS' test
 
 ## Quick start
 
-### 1. Zero-shot classification
+The high-level API is `TIPSPipeline` (and `TIPSDPTPipeline` for the DPT heads).
+It hides preprocessing, dtype handling, and tokenization behind a `CGImage`-in,
+typed-prediction-out surface. The bare `TIPSModel` / `TIPSDPTModel` types are
+still exposed for callers that need direct access to the forward pass.
 
-Mirrors the zero-shot cell from `TIPS_Demo.ipynb`.
+### 1. Zero-shot classification (high-level)
+
+```swift
+import CoreGraphics
+import MLXTIPS
+
+// Load a pipeline from a HF snapshot directory (model.safetensors + tokenizer.model)
+let pipeline = try MLXTIPS.fromPretrained(
+    directory: URL(fileURLWithPath: "path/to/google-tipsv2-b14"),
+    variant: .B
+)
+
+let image = try TIPSPipeline.loadCGImage(
+    at: URL(fileURLWithPath: "cat.jpg")
+)
+
+// Ranked (label, cosine score) pairs
+let ranking = try pipeline.zeroShotClassify(
+    image, labels: ["a cat", "a dog", "a car"]
+)
+for (label, score) in ranking {
+    print(String(format: "%+.3f  %@", score, label))
+}
+```
+
+For lower-level access — for example, batching pre-decoded tensors or wiring
+the model into a custom render loop — use the bare `TIPSWeightLoader` /
+`TIPSModel` API:
 
 ```swift
 import MLX
 import MLXTIPS
 
-// Load from a directory containing model.safetensors + tokenizer.model
 let model = try TIPSWeightLoader.load(
     directory: URL(fileURLWithPath: "path/to/google-tipsv2-b14"),
     variant: .B
 )
 
-// Or from split safetensors files
-let model = try TIPSWeightLoader.load(
-    visionSafetensorsURL: URL(fileURLWithPath: "vision.safetensors"),
-    textSafetensorsURL:   URL(fileURLWithPath: "text.safetensors"),
-    tokenizerURL:         URL(fileURLWithPath: "tokenizer.model"),
-    variant: .B
-)
+let pixelValues: MLXArray = ...              // (1, H, W, 3), [0,1], NHWC
+let imgOut = model.encodeImage(pixelValues)  // .clsToken / .registerTokens / .patchTokens
+let txtEmb = try model.encodeText(["a cat", "a dog"])
 
-// Encode image — pixel values in [0, 1], NHWC (1, H, W, 3)
-let pixelValues: MLXArray = ...            // load your image here
-let imgOut = model.encodeImage(pixelValues)
-// imgOut.clsToken       (1, 1, D)  — global image feature
-// imgOut.registerTokens (1, 1, D)  — register token
-// imgOut.patchTokens    (1, N, D)  — spatially-aware patch features
-
-// Encode text
-let labels = ["a cat", "a dog", "a car"]
-let txtEmb = try model.encodeText(labels)  // (3, D)
-
-// Cosine similarity
-let imgFeat = l2Normalize(imgOut.clsToken.squeezed(axis: 1))  // (1, D)
-let txtFeat = l2Normalize(txtEmb)                              // (3, D)
-let sim = matmul(imgFeat, txtFeat.transposed(1, 0))            // (1, 3)
+let imgFeat = l2Normalize(imgOut.clsToken.squeezed(axis: 1))
+let sim = matmul(imgFeat, l2Normalize(txtEmb).transposed(1, 0))
 eval(sim)
+```
+
+### 1b. Zero-shot segmentation (pipeline)
+
+```swift
+let seg = try pipeline.zeroShotSegment(image, labels: ["sky", "ground", "tree"])
+print("\(seg.gridSide)x\(seg.gridSide) patches, \(seg.labels.count) labels")
 ```
 
 ### 2. Intermediate layers
@@ -128,33 +154,70 @@ let layers = model.visionEncoder.getIntermediateLayers(
 
 > **Note:** `reshape=true` returns NHWC `(B, h, w, D)` to match MLX's channels-last convention, whereas the PyTorch original returns NCHW.
 
-### 3. DPT dense-prediction heads
-
-Mirrors `load_tipsv2_dpt` and `model.predict_*` from `mlx_tipsv2_dpt.py`.
+### 3. DPT dense-prediction heads (high-level)
 
 ```swift
 import MLXTIPS
 
-// config.json + model.safetensors come from google/tipsv2-b14-dpt
-let config = try DPTVariantConfig(
-    directory: URL(fileURLWithPath: "path/to/google-tipsv2-b14-dpt")
-)
-let dptModel = try TIPSWeightLoader.loadDPT(
+let dpt = try MLXTIPS.dptFromPretrained(
     dptDirectory:      URL(fileURLWithPath: "path/to/google-tipsv2-b14-dpt"),
     backboneDirectory: URL(fileURLWithPath: "path/to/google-tipsv2-b14")
 )
 
-let pixelValues: MLXArray = ...   // (1, H, W, 3), [0, 1], NHWC
+let image = try TIPSPipeline.loadCGImage(at: URL(fileURLWithPath: "scene.jpg"))
+let pred = try dpt(image)
+// pred.depth        (1, 1, H, W) metres
+// pred.normals      (1, 3, H, W) unit-length
+// pred.segmentation (1, 150, H, W) logits
+```
 
-// Individual heads — all return NCHW for PyTorch API parity
-let depth  = dptModel.predictDepth(pixelValues)        // (1, 1, H, W)  metres
-let norms  = dptModel.predictNormals(pixelValues)      // (1, 3, H, W)  unit normals
-let seg    = dptModel.predictSegmentation(pixelValues) // (1, 150, H, W) logits
+For the lower-level model:
 
-// Or all three at once
-let out = dptModel(pixelValues)
+```swift
+let dptModel = try TIPSWeightLoader.loadDPT(
+    dptDirectory:      URL(fileURLWithPath: "path/to/google-tipsv2-b14-dpt"),
+    backboneDirectory: URL(fileURLWithPath: "path/to/google-tipsv2-b14")
+)
+let out = dptModel(pixelValues)              // TIPSDPTOutput
 eval(out.depth, out.normals, out.segmentation)
 ```
+
+---
+
+## Benchmarks
+
+Both this port and the upstream PyTorch reference are benchmarked through
+`Benchmarks/torch_tips_bench.py` and `Tools/tips-bench/main.swift` with the
+same iteration count, image, model variant, and dtype. See
+[Benchmarks/README.md](Benchmarks/README.md) for reproduction commands.
+
+**B14, 448 px input** — Apple M5 Max, 128 GB unified memory, macOS 26.5.
+100 iterations after 10 warmup.
+
+#### fp32
+
+| Backend | Mode | median | mean | cold load |
+|---|---|---:|---:|---:|
+| PyTorch (MPS) | inference-only | 24.0 ms | 24.1 ms | 0.93 s |
+| mlx-swift (Metal) | inference-only | 9.0 ms | 9.1 ms | 0.11 s |
+| PyTorch (MPS) | end-to-end | 29.6 ms | 29.6 ms | — |
+| mlx-swift (Metal) | end-to-end | 9.4 ms | 9.5 ms | — |
+
+#### fp16
+
+| Backend | Mode | median | mean | cold load |
+|---|---|---:|---:|---:|
+| PyTorch (MPS) | inference-only | 8.3 ms | 8.3 ms | 1.31 s |
+| mlx-swift (Metal) | inference-only | 7.1 ms | 7.1 ms | 0.20 s |
+| PyTorch (MPS) | end-to-end | 14.4 ms | 14.4 ms | — |
+| mlx-swift (Metal) | end-to-end | 7.6 ms | 7.6 ms | — |
+
+The fp32 gap is real but mostly reflects PyTorch MPS's slower fp32 path
+(no fused SDPA in this version). At fp16 — the dtype most production
+inference uses — the inference-only gap is only ~17%. End-to-end stays
+wider because Swift's `CGImage` preprocessing is faster than PIL+ToTensor.
+See [Benchmarks/README.md](Benchmarks/README.md) for full discussion and
+reproduction commands. Rerun on your hardware before quoting speedups.
 
 ---
 

@@ -1,6 +1,7 @@
 .build/
 .swiftpm/
 .xcbuild/
+.xcdd/
 Packages/
 *.xcodeproj
 xcuserdata/
