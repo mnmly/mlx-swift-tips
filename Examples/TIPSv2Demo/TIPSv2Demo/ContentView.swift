@@ -210,12 +210,9 @@ struct ImageDropZone: View {
             }
         }
         .onTapGesture { pickImage() }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            providers.first?.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
-                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                    DispatchQueue.main.async { imageURL = url }
-                }
-            }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first else { return false }
+            imageURL = url
             return true
         }
         .contextMenu {

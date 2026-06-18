@@ -10,13 +10,15 @@ import MLXTIPS
 // with the CLI. This frontend only bridges `CGImage` → `NSImage` and loads the
 // base image used elsewhere in the UI.
 
+// `nonisolated` — pure CoreGraphics/AppKit value conversions with no shared
+// state; called from the off-actor (`@concurrent`) compute helpers.
 enum ImageUtils {
-    static func loadNSImage(url: URL) throws -> NSImage {
+    nonisolated static func loadNSImage(url: URL) throws -> NSImage {
         guard let img = NSImage(contentsOf: url) else { throw TIPSError.imageLoadFailed }
         return img
     }
 
-    static func nsImage(_ cg: CGImage) -> NSImage {
+    nonisolated static func nsImage(_ cg: CGImage) -> NSImage {
         NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 }
