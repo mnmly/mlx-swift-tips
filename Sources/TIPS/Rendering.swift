@@ -1,46 +1,55 @@
 import Foundation
-import AppKit
 import CoreGraphics
-import ImageIO
 import MLX
 import MLXLinalg
-import MLXTIPS
 
-// MARK: - Image I/O
+// MARK: - Spatial features (preview cache)
 
-enum ImageUtils {
+/// Patch-level features extracted from one image, cached so the GUI can render
+/// several visualisations (PCA, PCA-depth, K-means) without recomputing the
+/// backbone forward pass.
+///
+/// `@unchecked Sendable`: the only non-`Sendable` member is the immutable
+/// `MLXArray`, which is safe to read across the single detached worker the
+/// session contract already assumes (see ``TIPSSession``).
+public struct SpatialFeatures: @unchecked Sendable {
+    /// `(N, D)` float32 patch features.
+    public let feats: MLXArray
+    /// Patch grid side length (`sqrt(N)`).
+    public let side: Int
 
-    // MARK: Load
-    //
-    // CGImage→MLXArray decode lives in `TIPSPipeline.preprocess(_:)` (in
-    // the library). `loadNSImage` here only loads the AppKit image used as
-    // the base for blended segmentation overlays.
-
-    static func loadNSImage(url: URL) throws -> NSImage {
-        guard let img = NSImage(contentsOf: url) else { throw TIPSError.imageLoadFailed }
-        return img
+    public init(feats: MLXArray, side: Int) {
+        self.feats = feats
+        self.side = side
     }
+}
+
+// MARK: - TIPSRender
+
+/// Pure CoreGraphics rendering of model outputs to `CGImage`. Shared by every
+/// frontend so the CLI and the SwiftUI app produce byte-identical images.
+///
+/// No AppKit / SwiftUI here — `CGImage` is the library's presentation-neutral
+/// currency; frontends wrap it (`NSImage(cgImage:)`, `Image(decorative:)`, PNG
+/// encode) however they like.
+public enum TIPSRender {
 
     // MARK: PCA
 
-    /// PCA 3-component RGB visualisation (mirrors `vis_pca` in app.py).
-    /// Uses SVD, projects onto top-3 principal components, then applies sigmoid.
-    static func renderPCA(spatial: SpatialFeatures) throws -> NSImage {
-        let feats = spatial.feats        // (N, D)
+    /// PCA 3-component RGB visualisation (mirrors `vis_pca`): SVD → top-3
+    /// principal components → per-channel whiten → `sigmoid(2·z)`.
+    public static func pca(_ spatial: SpatialFeatures) -> CGImage {
+        let feats = spatial.feats
         let N = feats.dim(0)
         let side = spatial.side
 
-        let mean = feats.mean(axis: 0, keepDims: true)
-        let centred = feats - mean
+        let centred = feats - feats.mean(axis: 0, keepDims: true)
         MLX.eval(centred)
-
         let (_, _, vt) = MLXLinalg.svd(centred, stream: .cpu)
-        let top3 = vt[..<3]
-        let proj = matmul(centred, top3.transposed(1, 0))  // (N, 3)
+        let proj = matmul(centred, vt[..<3].transposed(1, 0))  // (N, 3)
         MLX.eval(proj)
         let projF = proj.asArray(Float.self)
 
-        // Per-channel: centre by mean, scale by std, then sigmoid(2*x)
         var rgb = [Float](repeating: 0, count: N * 3)
         for c in 0..<3 {
             var sum: Float = 0
@@ -48,64 +57,56 @@ enum ImageUtils {
             let mu = sum / Float(N)
             var var2: Float = 0
             for i in 0..<N { let d = projF[i * 3 + c] - mu; var2 += d * d }
-            let std = max(Float(var2 / Float(N)).squareRoot(), 1e-8)
+            let std = max((var2 / Float(N)).squareRoot(), 1e-8)
             for i in 0..<N {
-                let z = (projF[i * 3 + c] - mu) / std  // whitened
-                rgb[i * 3 + c] = 1 / (1 + exp(-2 * z)) // sigmoid
+                let z = (projF[i * 3 + c] - mu) / std
+                rgb[i * 3 + c] = 1 / (1 + exp(-2 * z))
             }
         }
-
-        let u8 = rgb.map { UInt8(($0 * 255).clamped(to: 0...255)) }
-        return makeNSImage(rgbU8: u8, width: side, height: side)
+        let u8 = rgb.map { UInt8((($0 * 255)).clamped(to: 0...255)) }
+        return makeImage(rgbU8: u8, width: side, height: side)
     }
 
-    /// 1st PCA component → inferno colormap (mirrors `vis_depth` in app.py).
-    static func renderPCADepth(spatial: SpatialFeatures) throws -> NSImage {
+    /// 1st PCA component → inferno colormap (mirrors `vis_depth`).
+    public static func pcaDepth(_ spatial: SpatialFeatures) -> CGImage {
         let feats = spatial.feats
         let N = feats.dim(0)
         let side = spatial.side
 
-        let mean = feats.mean(axis: 0, keepDims: true)
-        let centred = feats - mean
+        let centred = feats - feats.mean(axis: 0, keepDims: true)
         MLX.eval(centred)
-
         let (_, _, vt) = MLXLinalg.svd(centred, stream: .cpu)
-        let top1 = vt[..<1]
-        let proj = matmul(centred, top1.transposed(1, 0))  // (N, 1)
+        let proj = matmul(centred, vt[..<1].transposed(1, 0))  // (N, 1)
         MLX.eval(proj)
         let projF = proj.asArray(Float.self)
 
         let mn = projF.min() ?? 0, mx = projF.max() ?? 1
         let range = max(mx - mn, 1e-8)
-
         var u8 = [UInt8](repeating: 0, count: N * 3)
         for i in 0..<N {
-            let t = (projF[i] - mn) / range
-            let (r, g, b) = infernoColor(t)
+            let (r, g, b) = infernoColor((projF[i] - mn) / range)
             u8[i * 3]     = UInt8((r * 255).clamped(to: 0...255))
             u8[i * 3 + 1] = UInt8((g * 255).clamped(to: 0...255))
             u8[i * 3 + 2] = UInt8((b * 255).clamped(to: 0...255))
         }
-        return makeNSImage(rgbU8: u8, width: side, height: side)
+        return makeImage(rgbU8: u8, width: side, height: side)
     }
 
     // MARK: K-means
 
-    /// Simple Lloyd's K-means on spatial features, coloured via tab20 palette.
-    static func renderKMeans(spatial: SpatialFeatures, nClusters: Int) throws -> NSImage {
-        let feats = spatial.feats   // (N, D)
+    /// Lloyd's K-means (20 iters, K-means++ init) over spatial features,
+    /// coloured via the tab20 palette.
+    public static func kmeans(_ spatial: SpatialFeatures, nClusters: Int) -> CGImage {
+        let feats = spatial.feats
         MLX.eval(feats)
         let N = feats.dim(0)
+        let D = feats.dim(1)
         let side = spatial.side
         let featsF = feats.asArray(Float.self)
-        let D = feats.dim(1)
 
-        // K-means: 20 iterations, random init from data
         var centroids = initCentroids(featsF: featsF, N: N, D: D, k: nClusters)
         var assignments = [Int](repeating: 0, count: N)
-
         for _ in 0..<20 {
-            // Assign
             for i in 0..<N {
                 var bestDist = Float.greatestFiniteMagnitude
                 var bestC = 0
@@ -119,7 +120,6 @@ enum ImageUtils {
                 }
                 assignments[i] = bestC
             }
-            // Update
             var newCentroids = [Float](repeating: 0, count: nClusters * D)
             var counts = [Int](repeating: 0, count: nClusters)
             for i in 0..<N {
@@ -141,72 +141,62 @@ enum ImageUtils {
             u8[i * 3 + 1] = palette[c * 3 + 1]
             u8[i * 3 + 2] = palette[c * 3 + 2]
         }
-        return makeNSImage(rgbU8: u8, width: side, height: side)
+        return makeImage(rgbU8: u8, width: side, height: side)
     }
 
-    // MARK: Segmentation overlay
+    // MARK: Zero-shot segmentation (palette mask + overlay)
 
-    static func renderSegmentation(
-        labelMap: [Int32],
-        gridH: Int, gridW: Int,
-        labels: [String],
-        origImage: NSImage
-    ) -> (overlay: NSImage, mask: NSImage, detected: String) {
-        let n = labels.count
-        let palette = tab20Palette(n: max(n, 1))
-
+    /// Colour a per-patch label grid with the tab20 palette.
+    public static func labelMask(
+        labelMap: [Int32], gridW: Int, gridH: Int, nLabels: Int
+    ) -> CGImage {
+        let palette = tab20Palette(n: max(nLabels, 1))
         var u8 = [UInt8](repeating: 0, count: gridH * gridW * 3)
         for i in 0..<(gridH * gridW) {
-            let c = min(Int(labelMap[i]), n - 1)
+            let c = min(Int(labelMap[i]), nLabels - 1)
             u8[i * 3]     = palette[c * 3]
             u8[i * 3 + 1] = palette[c * 3 + 1]
             u8[i * 3 + 2] = palette[c * 3 + 2]
         }
-        let mask = makeNSImage(rgbU8: u8, width: gridW, height: gridH)
-
-        // Build overlay (blend)
-        let overlay = blendImages(base: origImage, segRGB: u8, gridW: gridW, gridH: gridH, alpha: 0.6)
-
-        // Count dominant labels
-        var counts = [Int: Int]()
-        for v in labelMap { counts[Int(v), default: 0] += 1 }
-        let total = labelMap.count
-        let sorted = counts.sorted { $0.value > $1.value }
-        let detected = sorted
-            .filter { Float($0.value) / Float(total) >= 0.02 && $0.key < labels.count }
-            .prefix(8)
-            .map { "\(labels[$0.key]) (\(String(format: "%.1f", Float($0.value) / Float(total) * 100))%)" }
-            .joined(separator: ", ")
-
-        return (overlay, mask, detected)
+        return makeImage(rgbU8: u8, width: gridW, height: gridH)
     }
 
-    // MARK: DPT Depth (turbo colormap)
+    /// Blend a per-patch label grid over a base image at `alpha`.
+    public static func labelOverlay(
+        base: CGImage, labelMap: [Int32], gridW: Int, gridH: Int, nLabels: Int, alpha: Float = 0.6
+    ) -> CGImage {
+        let palette = tab20Palette(n: max(nLabels, 1))
+        var segRGB = [UInt8](repeating: 0, count: gridH * gridW * 3)
+        for i in 0..<(gridH * gridW) {
+            let c = min(Int(labelMap[i]), nLabels - 1)
+            segRGB[i * 3]     = palette[c * 3]
+            segRGB[i * 3 + 1] = palette[c * 3 + 1]
+            segRGB[i * 3 + 2] = palette[c * 3 + 2]
+        }
+        return blend(base: base, segRGB: segRGB, gridW: gridW, gridH: gridH, alpha: alpha)
+    }
 
-    static func renderDepthTurbo(depth: MLXArray) -> NSImage {
-        // depth: (1, 1, H, W)
+    // MARK: DPT depth / normals / segmentation
+
+    /// `(1, 1, H, W)` depth → min-max normalised turbo colormap.
+    public static func depthTurbo(_ depth: MLXArray) -> CGImage {
         let h = depth.dim(2), w = depth.dim(3)
         let flat = depth.squeezed().asArray(Float.self)
         let mn = flat.min() ?? 0, mx = flat.max() ?? 1
         let range = max(mx - mn, 1e-8)
-
         var u8 = [UInt8](repeating: 0, count: h * w * 3)
         for i in 0..<(h * w) {
-            let t = (flat[i] - mn) / range
-            let (r, g, b) = turboColor(t)
+            let (r, g, b) = turboColor((flat[i] - mn) / range)
             u8[i * 3]     = UInt8((r * 255).clamped(to: 0...255))
             u8[i * 3 + 1] = UInt8((g * 255).clamped(to: 0...255))
             u8[i * 3 + 2] = UInt8((b * 255).clamped(to: 0...255))
         }
-        return makeNSImage(rgbU8: u8, width: w, height: h)
+        return makeImage(rgbU8: u8, width: w, height: h)
     }
 
-    // MARK: DPT Normals
-
-    static func renderNormals(normals: MLXArray) -> NSImage {
-        // normals: (1, 3, H, W), values in [-1, 1]
+    /// `(1, 3, H, W)` normals in `[-1, 1]` → RGB (`n·0.5 + 0.5`).
+    public static func normals(_ normals: MLXArray) -> CGImage {
         let h = normals.dim(2), w = normals.dim(3)
-        // NCHW → NHWC
         let nhwc = normals.transposed(0, 2, 3, 1)  // (1, H, W, 3)
         MLX.eval(nhwc)
         let flat = nhwc.asArray(Float.self)
@@ -214,18 +204,15 @@ enum ImageUtils {
         for i in 0..<(h * w * 3) {
             u8[i] = UInt8(((flat[i] * 0.5 + 0.5) * 255).clamped(to: 0...255))
         }
-        return makeNSImage(rgbU8: u8, width: w, height: h)
+        return makeImage(rgbU8: u8, width: w, height: h)
     }
 
-    // MARK: DPT Segmentation (ADE20K)
-
-    static func renderADE20KSeg(seg: MLXArray) -> NSImage {
-        // seg: (1, C, H, W) — argmax over C
+    /// `(1, C, H, W)` class logits → argmax → ADE20K palette.
+    public static func ade20kSeg(_ seg: MLXArray) -> CGImage {
         let h = seg.dim(2), w = seg.dim(3)
         let labels = argMax(seg[0], axis: 0)  // (H, W)
         MLX.eval(labels)
         let labelArr = labels.asArray(Int32.self)
-
         var u8 = [UInt8](repeating: 0, count: h * w * 3)
         for i in 0..<(h * w) {
             let cls = min(Int(labelArr[i]), ade20kPalette.count / 3 - 1)
@@ -233,12 +220,13 @@ enum ImageUtils {
             u8[i * 3 + 1] = ade20kPalette[cls * 3 + 1]
             u8[i * 3 + 2] = ade20kPalette[cls * 3 + 2]
         }
-        return makeNSImage(rgbU8: u8, width: w, height: h)
+        return makeImage(rgbU8: u8, width: w, height: h)
     }
 
-    // MARK: - Helpers
+    // MARK: - Pixel-buffer → CGImage
 
-    static func makeNSImage(rgbU8: [UInt8], width: Int, height: Int) -> NSImage {
+    /// Build an RGB `CGImage` from a tightly-packed RGB byte buffer.
+    public static func makeImage(rgbU8: [UInt8], width: Int, height: Int) -> CGImage {
         var rgba = [UInt8](repeating: 255, count: width * height * 4)
         for i in 0..<(width * height) {
             rgba[i * 4]     = rgbU8[i * 3]
@@ -246,96 +234,73 @@ enum ImageUtils {
             rgba[i * 4 + 2] = rgbU8[i * 3 + 2]
         }
         let cs = CGColorSpaceCreateDeviceRGB()
-        guard var mutableRGBA = Optional(rgba),
-              let ctx = CGContext(
-                data: &mutableRGBA,
-                width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: width * 4,
-                space: cs,
-                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-              ),
-              let cgImg = ctx.makeImage()
-        else { return NSImage() }
-        return NSImage(cgImage: cgImg, size: NSSize(width: width, height: height))
+        let ctx = CGContext(
+            data: &rgba, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: cs, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        )!
+        return ctx.makeImage()!
     }
 
-    private static func blendImages(base: NSImage, segRGB: [UInt8], gridW: Int, gridH: Int, alpha: Float) -> NSImage {
-        // Resize orig image to grid size and blend
+    private static func blend(
+        base: CGImage, segRGB: [UInt8], gridW: Int, gridH: Int, alpha: Float
+    ) -> CGImage {
         let cs = CGColorSpaceCreateDeviceRGB()
         var baseBuf = [UInt8](repeating: 0, count: gridW * gridH * 4)
-        guard let ctx = CGContext(
+        let ctx = CGContext(
             data: &baseBuf, width: gridW, height: gridH,
             bitsPerComponent: 8, bytesPerRow: gridW * 4,
             space: cs, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-        ) else { return base }
-        if let cgImg = base.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            ctx.draw(cgImg, in: CGRect(x: 0, y: 0, width: gridW, height: gridH))
-        }
+        )!
+        ctx.draw(base, in: CGRect(x: 0, y: 0, width: gridW, height: gridH))
 
         var blended = [UInt8](repeating: 255, count: gridW * gridH * 4)
         for i in 0..<(gridW * gridH) {
-            let br = Float(baseBuf[i * 4])     / 255
-            let bg = Float(baseBuf[i * 4 + 1]) / 255
-            let bb = Float(baseBuf[i * 4 + 2]) / 255
-            let sr = Float(segRGB[i * 3])      / 255
-            let sg = Float(segRGB[i * 3 + 1])  / 255
-            let sb = Float(segRGB[i * 3 + 2])  / 255
-            blended[i * 4]     = UInt8(((1 - alpha) * br + alpha * sr) * 255)
-            blended[i * 4 + 1] = UInt8(((1 - alpha) * bg + alpha * sg) * 255)
-            blended[i * 4 + 2] = UInt8(((1 - alpha) * bb + alpha * sb) * 255)
+            for ch in 0..<3 {
+                let b = Float(baseBuf[i * 4 + ch]) / 255
+                let s = Float(segRGB[i * 3 + ch]) / 255
+                blended[i * 4 + ch] = UInt8((((1 - alpha) * b + alpha * s) * 255).clamped(to: 0...255))
+            }
         }
-        guard let ctx2 = CGContext(
+        let ctx2 = CGContext(
             data: &blended, width: gridW, height: gridH,
             bitsPerComponent: 8, bytesPerRow: gridW * 4,
             space: cs, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-        ), let cgImg = ctx2.makeImage()
-        else { return base }
-        return NSImage(cgImage: cgImg, size: NSSize(width: gridW, height: gridH))
+        )!
+        return ctx2.makeImage()!
     }
 }
 
-// MARK: - Float clamping
+// MARK: - Float clamp
 
 extension Float {
-    func clamped(to r: ClosedRange<Float>) -> Float { Swift.min(Swift.max(self, r.lowerBound), r.upperBound) }
+    func clamped(to r: ClosedRange<Float>) -> Float {
+        Swift.min(Swift.max(self, r.lowerBound), r.upperBound)
+    }
 }
 
-// MARK: - Colormap helpers
+// MARK: - Colormaps
 
-/// Turbo colormap interpolated from control points.
 func turboColor(_ t: Float) -> (Float, Float, Float) {
-    let pts: [(Float, Float, Float, Float)] = [
-        (0.0,  0.189, 0.072, 0.230),
-        (0.1,  0.243, 0.293, 0.806),
-        (0.2,  0.182, 0.484, 0.968),
-        (0.3,  0.091, 0.655, 0.843),
-        (0.4,  0.003, 0.793, 0.597),
-        (0.5,  0.247, 0.898, 0.350),
-        (0.6,  0.659, 0.966, 0.131),
-        (0.7,  0.949, 0.890, 0.101),
-        (0.8,  0.988, 0.649, 0.084),
-        (0.9,  0.895, 0.330, 0.064),
-        (1.0,  0.478, 0.054, 0.031),
-    ]
-    return lerpColormap(pts, t: t)
+    lerpColormap([
+        (0.0, 0.189, 0.072, 0.230), (0.1, 0.243, 0.293, 0.806),
+        (0.2, 0.182, 0.484, 0.968), (0.3, 0.091, 0.655, 0.843),
+        (0.4, 0.003, 0.793, 0.597), (0.5, 0.247, 0.898, 0.350),
+        (0.6, 0.659, 0.966, 0.131), (0.7, 0.949, 0.890, 0.101),
+        (0.8, 0.988, 0.649, 0.084), (0.9, 0.895, 0.330, 0.064),
+        (1.0, 0.478, 0.054, 0.031),
+    ], t: t)
 }
 
-/// Inferno colormap interpolated from control points.
 func infernoColor(_ t: Float) -> (Float, Float, Float) {
-    let pts: [(Float, Float, Float, Float)] = [
-        (0.0, 0.001, 0.000, 0.014),
-        (0.1, 0.083, 0.016, 0.133),
-        (0.2, 0.221, 0.026, 0.259),
-        (0.3, 0.350, 0.041, 0.302),
-        (0.4, 0.490, 0.068, 0.273),
-        (0.5, 0.641, 0.119, 0.181),
-        (0.6, 0.779, 0.237, 0.095),
-        (0.7, 0.894, 0.428, 0.032),
-        (0.8, 0.970, 0.648, 0.068),
-        (0.9, 0.998, 0.863, 0.318),
+    lerpColormap([
+        (0.0, 0.001, 0.000, 0.014), (0.1, 0.083, 0.016, 0.133),
+        (0.2, 0.221, 0.026, 0.259), (0.3, 0.350, 0.041, 0.302),
+        (0.4, 0.490, 0.068, 0.273), (0.5, 0.641, 0.119, 0.181),
+        (0.6, 0.779, 0.237, 0.095), (0.7, 0.894, 0.428, 0.032),
+        (0.8, 0.970, 0.648, 0.068), (0.9, 0.998, 0.863, 0.318),
         (1.0, 0.988, 0.998, 0.645),
-    ]
-    return lerpColormap(pts, t: t)
+    ], t: t)
 }
 
 private func lerpColormap(_ pts: [(Float, Float, Float, Float)], t: Float) -> (Float, Float, Float) {
@@ -352,14 +317,14 @@ private func lerpColormap(_ pts: [(Float, Float, Float, Float)], t: Float) -> (F
     return (last.1, last.2, last.3)
 }
 
-/// Tab20 palette (20 distinct colours), repeated if n > 20.
+/// Tab20 palette (20 distinct colours), repeated if `n > 20`.
 func tab20Palette(n: Int) -> [UInt8] {
     let base: [(UInt8, UInt8, UInt8)] = [
-        (31,119,180),(174,199,232),(255,127,14),(255,187,120),
-        (44,160,44),(152,223,138),(214,39,40),(255,152,150),
-        (148,103,189),(197,176,213),(140,86,75),(196,156,148),
-        (227,119,194),(247,182,210),(127,127,127),(199,199,199),
-        (188,189,34),(219,219,141),(23,190,207),(158,218,229),
+        (31, 119, 180), (174, 199, 232), (255, 127, 14), (255, 187, 120),
+        (44, 160, 44), (152, 223, 138), (214, 39, 40), (255, 152, 150),
+        (148, 103, 189), (197, 176, 213), (140, 86, 75), (196, 156, 148),
+        (227, 119, 194), (247, 182, 210), (127, 127, 127), (199, 199, 199),
+        (188, 189, 34), (219, 219, 141), (23, 190, 207), (158, 218, 229),
     ]
     var out = [UInt8]()
     out.reserveCapacity(n * 3)
@@ -370,17 +335,10 @@ func tab20Palette(n: Int) -> [UInt8] {
     return out
 }
 
-// MARK: - K-means init (K-means++ style: pick first randomly then furthest)
-
 private func initCentroids(featsF: [Float], N: Int, D: Int, k: Int) -> [Float] {
     var centroids = [Float](repeating: 0, count: k * D)
-    // Pick first centroid: index 0
-    var chosen = [Int]()
-    chosen.append(0)
     for di in 0..<D { centroids[di] = featsF[di] }
-
     for c in 1..<k {
-        // Find point furthest from nearest centroid
         var bestDist: Float = -1
         var bestIdx = 0
         for i in 0..<N {
@@ -395,14 +353,12 @@ private func initCentroids(featsF: [Float], N: Int, D: Int, k: Int) -> [Float] {
             }
             if minD > bestDist { bestDist = minD; bestIdx = i }
         }
-        chosen.append(bestIdx)
         for d in 0..<D { centroids[c * D + d] = featsF[bestIdx * D + d] }
     }
     return centroids
 }
 
-// MARK: - ADE20K Palette (150 classes, HSV golden-ratio spacing)
-
+/// ADE20K 150-class palette (HSV golden-ratio spacing).
 let ade20kPalette: [UInt8] = {
     var out = [UInt8](repeating: 0, count: 151 * 3)
     for i in 1...150 {

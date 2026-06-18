@@ -159,7 +159,7 @@ public struct TIPSWeightLoader {
             var mk = key
             if mk.hasPrefix("vision_encoder.") {
                 mk = String(mk.dropFirst("vision_encoder.".count))
-            } else if mk.hasPrefix("text_encoder.") || mk == "temperature" {
+            } else if mk.hasPrefix("text_encoder.") || mk == "temperature" || mk == "temperature_contrastive" {
                 continue
             }
             var v = value
@@ -190,7 +190,7 @@ public struct TIPSWeightLoader {
             } else if mk.hasPrefix("vision_encoder.") {
                 continue
             }
-            if mk == "temperature" { continue }
+            if mk == "temperature" || mk == "temperature_contrastive" { continue }
             mk = remapTextKey(mk)
             out.append((mk, value.asType(dtype)))
         }
@@ -228,7 +228,15 @@ public struct TIPSWeightLoader {
             var v = value
             if key.hasSuffix(".weight") && v.ndim == 4 {
                 if key.contains(".resize_layers.0.weight") || key.contains(".resize_layers.1.weight") {
-                    // ConvTranspose2d: (in, out, kH, kW) -> (out, kH, kW, in)
+                    // ConvTranspose2d: (in, out, kH, kW) -> (out, kH, kW, in).
+                    //
+                    // The HF `tipsv2-*-dpt` checkpoint's Flax->Torch converter does
+                    // NOT apply the 180° kernel flip (Flax used transpose_kernel=False),
+                    // so its ConvTranspose weights are unflipped. MLX `ConvTransposed2d`
+                    // follows PyTorch's convention and expects the flipped kernel.
+                    // Replicate the reference fix (decoders.py @ b9d4418) by spatially
+                    // flipping the (kH, kW) axes before the layout transpose.
+                    v = v[.ellipsis, .stride(by: -1), .stride(by: -1)]
                     v = v.transposed(1, 2, 3, 0)
                 } else {
                     // Conv2d: (out, in, kH, kW) -> (out, kH, kW, in)

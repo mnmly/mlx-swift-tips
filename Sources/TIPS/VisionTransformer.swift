@@ -298,12 +298,17 @@ public class VisionTransformer: Module {
     private func interpolatePosEncoding(h: Int, w: Int) -> MLXArray {
         let h0 = h / patchSize
         let w0 = w / patchSize
-        if h0 * w0 == numPatches {
+        // Key off the ACTUAL positional-embedding grid from the checkpoint
+        // (e.g. 32×32 = 1024), not the configured `numPatches` — otherwise a
+        // session loaded at a non-training resolution skips interpolation and
+        // the pos-embed shape mismatches the token count.
+        let realN = posEmbed.dim(1) - 1
+        if h0 * w0 == realN {
             return posEmbed
         }
         let classPosEmb = posEmbed[0..., ..<1]
         let patchPosEmb = posEmbed[0..., 1...]
-        let side = Int(Double(numPatches).squareRoot())
+        let side = Int(Double(realN).squareRoot())
         let d = embedDim
 
         // Pull to CPU for bilinear resize

@@ -15,6 +15,14 @@ xcuserdata/
 .swiftpm/config.json
 
 out/
+out_smoke/
+
+# DocC static site (served via gh-pages branch / Actions, not main:/docs)
+/docs/
 
 # Parity test fixtures (large safetensors, generated locally)
 Tests/TIPSTests/Fixtures/
+
+# Track the demo app project (but not per-user state — xcuserdata stays ignored)
+!Examples/TIPSv2Demo/TIPSv2Demo.xcodeproj/
+!Examples/TIPSv2Demo/TIPSv2Demo.xcodeproj/project.xcworkspace/

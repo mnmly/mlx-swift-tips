@@ -1,0 +1,51 @@
+# Builds DocC on push to main and deploys to GitHub Pages.
+#
+# ONE-TIME SETUP (deploy fails with "HttpError: Not Found" until done):
+#   gh api -X POST repos/mnmly/mlx-swift-tips/pages -f build_type=workflow
+# or: Settings → Pages → Source → "GitHub Actions".
+#
+# Targets/base-path are baked into scripts/build_docs.sh (MLXTIPS, mlx-swift-tips).
+
+name: Build and deploy DocC
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build docs
+        run: ./scripts/build_docs.sh
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

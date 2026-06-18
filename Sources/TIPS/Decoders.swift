@@ -175,7 +175,9 @@ public class ReassembleBlocks: Module {
                 let xFlat = feat.reshaped(b, h * w, d)
                 let readout = broadcast(clsFlat[0..., .newAxis, 0...], to: [b, h * w, d])
                 let xCat = concatenated([xFlat, readout], axis: -1)
-                let xProj = gelu(readoutProjects[i](xCat))
+                // JAX GELU uses the tanh approximation by default (matches
+                // `F.gelu(..., approximate='tanh')` in the reference decoders.py).
+                let xProj = geluApproximate(readoutProjects[i](xCat))
                 feat = xProj.reshaped(b, h, w, d)
             }
 
@@ -274,7 +276,8 @@ public class DPTDepthHead: Module {
             features: features, reassemble: reassemble,
             convs: convs, fusionBlocks: fusionBlocks, project: project
         )
-        out = relu(out)
+        // No activation after `project`: the reference DPTHead defaults to
+        // `output_activation=False`, i.e. no ReLU between the trunk and the head.
         out = depthHead(out)  // (B, H', W', numBins)
 
         let binCenters = MLXArray(

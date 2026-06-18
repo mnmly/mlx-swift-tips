@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import MLXTIPS
 
 // MARK: - Variant enum for the picker (wraps TIPSWeightLoader.Variant)
@@ -20,6 +21,16 @@ enum TIPSVariantOption: String, CaseIterable, Identifiable, Hashable {
         case .L:      return .L
         case .So400m: return .So400m
         case .g:      return .g
+        }
+    }
+
+    /// Map a Hub repo (or its DPT counterpart) to the matching picker option.
+    init(hubRepo: TIPSHub.Repo) {
+        switch hubRepo.backboneRepo {
+        case .l14:      self = .L
+        case .so400m14: self = .So400m
+        case .g14:      self = .g
+        default:        self = .B
         }
     }
 }
@@ -68,12 +79,32 @@ struct ModelControlsView: View {
 
             // Resolution picker
             Picker("Resolution", selection: $mm.resolution) {
-                ForEach([224, 336, 448, 672, 896], id: \.self) { r in
+                ForEach([224, 336, 448, 672, 896, 1120, 1344], id: \.self) { r in
                     Text("\(r)").tag(r)
                 }
             }
             .pickerStyle(.menu)
             .frame(width: 80)
+
+            // Download from Hugging Face
+            Menu {
+                Section("Backbone") {
+                    ForEach([TIPSHub.Repo.b14, .l14, .so400m14, .g14], id: \.self) { repo in
+                        Button(repo.displayName) { chooseCacheAndDownload(repo) }
+                    }
+                }
+                Section("Backbone + DPT heads") {
+                    ForEach([TIPSHub.Repo.b14dpt, .l14dpt, .so400m14dpt, .g14dpt], id: \.self) { repo in
+                        Button(repo.displayName) { chooseCacheAndDownload(repo) }
+                    }
+                }
+            } label: {
+                Label(
+                    mm.isDownloading ? "Downloading \(Int(mm.downloadProgress * 100))%" : "Download",
+                    systemImage: "icloud.and.arrow.down"
+                )
+            }
+            .disabled(mm.isDownloading)
 
             // Load TIPS button
             Button {
@@ -81,6 +112,7 @@ struct ModelControlsView: View {
                 panel.canChooseFiles = false
                 panel.canChooseDirectories = true
                 panel.prompt = "Select TIPS model directory"
+                panel.directoryURL = mm.cacheDir ?? TIPSHub.defaultCacheRoot
                 if panel.runModal() == .OK, let url = panel.url {
                     mm.loadTIPS(directory: url)
                 }
@@ -98,11 +130,13 @@ struct ModelControlsView: View {
                 panel.canChooseFiles = false
                 panel.canChooseDirectories = true
                 panel.prompt = "Select DPT model directory"
+                panel.directoryURL = mm.cacheDir ?? TIPSHub.defaultCacheRoot
                 if panel.runModal() == .OK, let dptURL = panel.url {
                     let panel2 = NSOpenPanel()
                     panel2.canChooseFiles = false
                     panel2.canChooseDirectories = true
                     panel2.prompt = "Select backbone directory"
+                    panel2.directoryURL = mm.cacheDir ?? TIPSHub.defaultCacheRoot
                     if panel2.runModal() == .OK, let bbURL = panel2.url {
                         mm.loadDPT(dptDirectory: dptURL, backboneDirectory: bbURL)
                     }
@@ -119,6 +153,27 @@ struct ModelControlsView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(maxWidth: 200)
+        }
+    }
+
+    /// Resolve a writable cache folder (reusing a prior grant, else prompting
+    /// with the HF cache as the default), then download into it. The panel
+    /// grant is what lets the sandboxed app write to `~/.cache/huggingface`.
+    private func chooseCacheAndDownload(_ repo: TIPSHub.Repo) {
+        if let dir = mm.cacheDir {
+            mm.download(repo: repo, into: dir)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Use as Cache"
+        panel.message = "Choose the Hugging Face cache folder to download models into."
+        panel.directoryURL = TIPSHub.defaultCacheRoot
+        if panel.runModal() == .OK, let url = panel.url {
+            mm.setCacheDir(url)   // persist the grant for next launch
+            mm.download(repo: repo, into: url)
         }
     }
 }

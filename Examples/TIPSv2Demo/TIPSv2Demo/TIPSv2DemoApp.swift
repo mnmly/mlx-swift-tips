@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct TIPSExplorerApp: App {
+struct TIPSv2DemoApp: App {
     @StateObject private var modelManager = ModelManager()
 
     var body: some Scene {

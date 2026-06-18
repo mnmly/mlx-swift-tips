@@ -1,4 +1,5 @@
 import SwiftUI
+import MLXTIPS
 
 struct PCAView: View {
     @EnvironmentObject var mm: ModelManager
